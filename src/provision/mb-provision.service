@@ -1,0 +1,16 @@
+[Unit]
+Description=MagicBridge WiFi Provisioning
+After=NetworkManager.service network-pre.target
+Before=magicbridge.service
+ConditionPathExists=!/etc/magicbridge/.provisioned
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mb-provision.sh
+RemainAfterExit=no
+TimeoutStartSec=600
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

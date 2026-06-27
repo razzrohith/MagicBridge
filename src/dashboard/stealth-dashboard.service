@@ -1,0 +1,19 @@
+[Unit]
+Description=MagicBridge Stealth Admin Dashboard
+After=network.target magicbridge.service
+Wants=magicbridge.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/magicbridge/dashboard
+ExecStart=/usr/bin/python3 /opt/magicbridge/dashboard/stealth-dashboard.py
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=FLASK_ENV=production
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,389 @@
+#!/usr/bin/env python3
+"""
+MagicBridge — Video Capture Manager
+
+Manages the MJPEG/H264 stream from USB HDMI capture cards.
+Primary streamer: ustreamer (apt install ustreamer)
+Fallback:         ffmpeg (apt install ffmpeg)
+
+Compatible capture cards (all UVC/V4L2):
+  - Generic MS2109 USB HDMI capture cards
+  - Elgato Cam Link 4K (UVC-compatible on Linux)
+  - UGREEN USB capture cards
+  - Any V4L2 VIDEO_CAPTURE device
+"""
+import glob
+import logging
+import os
+import re
+import shutil
+import subprocess
+import threading
+import time
+
+log = logging.getLogger("magicbridge.video")
+
+STREAM_HOST = "127.0.0.1"
+STREAM_PORT = 8081   # nginx proxies /stream → this port
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+class VideoManager:
+    """Start/stop/restart the MJPEG video stream from a V4L2 capture device."""
+
+    def __init__(self):
+        self.process    = None
+        self.device     = None
+        self.resolution = "1920x1080"
+        self.fps        = 30
+        self.quality    = 80      # MJPEG quality 1–100
+        self.mode       = "mjpeg" # "mjpeg" | "h264" (h264 needs ffmpeg)
+        self.port       = STREAM_PORT
+        self._lock      = threading.Lock()
+        self._mon_thr   = None    # watchdog thread
+
+    # ── Device discovery ───────────────────────────────────────────────────────
+
+    def detect_devices(self) -> list:
+        """Return list of V4L2 VIDEO_CAPTURE devices with metadata."""
+        devices = []
+        for dev in sorted(glob.glob("/dev/video*")):
+            try:
+                r = subprocess.run(
+                    ["v4l2-ctl", "--device", dev, "--info"],
+                    capture_output=True, text=True, timeout=2
+                )
+                if "Video Capture" not in r.stdout:
+                    continue
+                name = dev
+                m = re.search(r"Card type\s*:\s*(.+)", r.stdout)
+                if m:
+                    name = m.group(1).strip()
+                bus = ""
+                m2 = re.search(r"Bus info\s*:\s*(.+)", r.stdout)
+                if m2:
+                    bus = m2.group(1).strip()
+                devices.append({"device": dev, "name": name, "bus": bus})
+            except Exception:
+                continue
+        return devices
+
+    def get_best_device(self) -> str:
+        """Return first found VIDEO_CAPTURE device, or None."""
+        devs = self.detect_devices()
+        return devs[0]["device"] if devs else None
+
+    def get_resolutions(self, device: str = None) -> list:
+        """Return sorted list of supported resolutions for a device."""
+        dev = device or self.device or "/dev/video0"
+        defaults = ["1920x1080", "1280x720", "854x480", "640x480"]
+        try:
+            r = subprocess.run(
+                ["v4l2-ctl", "--device", dev, "--list-formats-ext"],
+                capture_output=True, text=True, timeout=5
+            )
+            seen: set = set()
+            for m in re.finditer(r"(\d{3,4})x(\d{3,4})", r.stdout):
+                w, h = int(m.group(1)), int(m.group(2))
+                if w >= 640 and h >= 360:
+                    seen.add(f"{w}x{h}")
+            if seen:
+                return sorted(seen, key=lambda s: -int(s.split("x")[0]))
+        except Exception:
+            pass
+        return defaults
+
+    # ── Stream control ─────────────────────────────────────────────────────────
+
+    def start(self, device: str = None, resolution: str = None,
+              fps: int = None, quality: int = None, mode: str = None) -> bool:
+        """Start streaming. Returns True on success. Safe to call repeatedly."""
+        with self._lock:
+            if device:     self.device     = device
+            if resolution: self.resolution = resolution
+            if fps is not None:     self.fps     = int(fps)
+            if quality is not None: self.quality = int(quality)
+            if mode:       self.mode       = mode
+
+            if not self.device:
+                self.device = self.get_best_device()
+            if not self.device:
+                log.warning("No V4L2 capture device found")
+                return False
+
+            self._stop_locked()
+
+            if shutil.which("ustreamer"):
+                ok = self._start_ustreamer()
+            else:
+                log.info("ustreamer not found — using ffmpeg fallback")
+                ok = self._start_ffmpeg()
+
+            return ok
+
+    def stop(self):
+        with self._lock:
+            self._stop_locked()
+
+    def restart(self):
+        with self._lock:
+            self._stop_locked()
+        time.sleep(1)
+        with self._lock:
+            if self.device:
+                if shutil.which("ustreamer"):
+                    self._start_ustreamer()
+                else:
+                    self._start_ffmpeg()
+
+    def update_quality(self, quality: int) -> bool:
+        """Change MJPEG quality without full restart (restarts ustreamer)."""
+        self.quality = max(1, min(100, quality))
+        return self.start()
+
+    # ── Internal stream launchers ──────────────────────────────────────────────
+
+    def _stop_locked(self):
+        """Stop process (caller holds lock)."""
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+        self.process = None
+
+    def _start_ustreamer(self) -> bool:
+        """Launch ustreamer MJPEG server."""
+        w, h = self.resolution.split("x")
+        cmd = [
+            "ustreamer",
+            "--device",        self.device,
+            "--width",         w,
+            "--height",        h,
+            "--desired-fps",   str(self.fps),
+            "--quality",       str(self.quality),
+            "--host",          STREAM_HOST,
+            "--port",          str(self.port),
+            "--workers",       "2",
+            "--persistent",              # keep running even if device disconnects
+            "--drop-same-frames=30",     # skip identical frames, save CPU
+        ]
+        try:
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+            )
+            time.sleep(0.8)
+            if self.process.poll() is not None:
+                log.warning("ustreamer exited immediately — check device/resolution")
+                self.process = None
+                return False
+            log.info("ustreamer: %s %s %dfps q=%d → %s:%d",
+                     self.device, self.resolution, self.fps,
+                     self.quality, STREAM_HOST, self.port)
+            return True
+        except FileNotFoundError:
+            log.error("ustreamer binary not found")
+            return False
+        except Exception as e:
+            log.error("ustreamer start error: %s", e)
+            return False
+
+    def _start_ffmpeg(self) -> bool:
+        """
+        Launch ffmpeg MJPEG stream as a multipart HTTP stream on STREAM_PORT.
+        ffmpeg → pipe → Python HTTP mini-server handles the actual serving.
+        """
+        if not shutil.which("ffmpeg"):
+            log.error("Neither ustreamer nor ffmpeg found — no video stream")
+            return False
+        w, h = self.resolution.split("x")
+        # ffmpeg captures from V4L2 and outputs raw MJPEG to stdout
+        cmd = [
+            "ffmpeg",
+            "-f",         "v4l2",
+            "-input_format", "mjpeg",
+            "-video_size", f"{w}x{h}",
+            "-framerate", str(self.fps),
+            "-i",         self.device,
+            "-q:v",       str(max(1, min(31, 31 - int(self.quality * 0.3)))),
+            "-f",         "mjpeg",
+            "pipe:1",
+        ]
+        try:
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+            )
+            time.sleep(0.5)
+            if self.process.poll() is not None:
+                log.warning("ffmpeg exited immediately — trying mjpeg fallback format")
+                # Retry without input_format=mjpeg (some cards output raw)
+                cmd2 = [
+                    "ffmpeg", "-f", "v4l2",
+                    "-video_size", f"{w}x{h}", "-framerate", str(self.fps),
+                    "-i", self.device, "-vf", "scale="+self.resolution,
+                    "-q:v", "5", "-f", "mjpeg", "pipe:1",
+                ]
+                self.process = subprocess.Popen(
+                    cmd2, stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL, close_fds=True,
+                )
+                time.sleep(0.5)
+                if self.process.poll() is not None:
+                    self.process = None
+                    return False
+            log.info("ffmpeg: %s %s %dfps → pipe", self.device, self.resolution, self.fps)
+            # Start a simple MJPEG HTTP server in a thread
+            threading.Thread(
+                target=self._serve_ffmpeg_stream,
+                daemon=True
+            ).start()
+            return True
+        except Exception as e:
+            log.error("ffmpeg start error: %s", e)
+            return False
+
+    def _serve_ffmpeg_stream(self):
+        """
+        Read MJPEG frames from ffmpeg stdout and serve them as
+        multipart/x-mixed-replace on STREAM_PORT.
+        """
+        import socket
+        import select as sel
+
+        BOUNDARY = b"--frame"
+        HEADER   = (
+            b"HTTP/1.1 200 OK\r\n"
+            b"Content-Type: multipart/x-mixed-replace; boundary=frame\r\n"
+            b"Cache-Control: no-cache, no-store\r\n"
+            b"Connection: close\r\n\r\n"
+        )
+
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            srv.bind((STREAM_HOST, self.port))
+        except OSError as e:
+            log.error("ffmpeg stream server bind failed: %s", e)
+            return
+        srv.listen(4)
+        srv.settimeout(1.0)
+        log.info("ffmpeg MJPEG server on %s:%d", STREAM_HOST, self.port)
+
+        buf = b""
+
+        def _read_frame(proc_stdout) -> bytes:
+            nonlocal buf
+            SOI = b"\xff\xd8"
+            EOI = b"\xff\xd9"
+            while True:
+                chunk = proc_stdout.read(4096)
+                if not chunk:
+                    return b""
+                buf += chunk
+                s = buf.find(SOI)
+                if s < 0:
+                    buf = b""
+                    continue
+                buf = buf[s:]
+                e = buf.find(EOI)
+                if e < 0:
+                    continue
+                frame = buf[:e + 2]
+                buf = buf[e + 2:]
+                return frame
+
+        clients = []
+        while self.process and self.process.poll() is None:
+            try:
+                r, _, _ = sel.select([srv] + clients, [], [], 0.05)
+                for s in r:
+                    if s is srv:
+                        try:
+                            conn, _ = srv.accept()
+                            # Drain HTTP request headers
+                            conn.recv(4096)
+                            conn.sendall(HEADER)
+                            clients.append(conn)
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            if s.recv(1, socket.MSG_PEEK) == b"":
+                                clients.remove(s)
+                                s.close()
+                        except Exception:
+                            if s in clients:
+                                clients.remove(s)
+                            try:
+                                s.close()
+                            except Exception:
+                                pass
+                if clients and self.process:
+                    frame = _read_frame(self.process.stdout)
+                    if not frame:
+                        break
+                    part = (BOUNDARY + b"\r\nContent-Type: image/jpeg\r\n"
+                            b"Content-Length: " + str(len(frame)).encode()
+                            + b"\r\n\r\n" + frame + b"\r\n")
+                    dead = []
+                    for c in clients:
+                        try:
+                            c.sendall(part)
+                        except Exception:
+                            dead.append(c)
+                    for d in dead:
+                        if d in clients:
+                            clients.remove(d)
+                        try:
+                            d.close()
+                        except Exception:
+                            pass
+            except Exception as e:
+                log.debug("ffmpeg stream loop: %s", e)
+                break
+        for c in clients:
+            try:
+                c.close()
+            except Exception:
+                pass
+        srv.close()
+
+    # ── Status & watchdog ──────────────────────────────────────────────────────
+
+    def is_running(self) -> bool:
+        return self.process is not None and self.process.poll() is None
+
+    def status(self) -> dict:
+        streamer = "ustreamer" if shutil.which("ustreamer") else \
+                   ("ffmpeg" if shutil.which("ffmpeg") else "none")
+        return {
+            "running":    self.is_running(),
+            "device":     self.device,
+            "resolution": self.resolution,
+            "fps":        self.fps,
+            "quality":    self.quality,
+            "mode":       self.mode,
+            "port":       self.port,
+            "streamer":   streamer,
+            "devices":    self.detect_devices(),
+        }
+
+    def start_watchdog(self):
+        """Background thread that auto-restarts a dead stream every 5 s."""
+        def _watch():
+            while True:
+                time.sleep(5)
+                with self._lock:
+                    if self.device and not self.is_running():
+                        log.info("Stream died — restarting…")
+                self.restart()
+        t = threading.Thread(target=_watch, daemon=True, name="mb-video-watchdog")
+        t.start()
+        self._mon_thr = t

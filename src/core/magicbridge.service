@@ -1,0 +1,18 @@
+[Unit]
+Description=MagicBridge KVM Server
+After=network.target mb-gadget.service
+Wants=mb-gadget.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /opt/magicbridge/core/magicbridge.py
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=30
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

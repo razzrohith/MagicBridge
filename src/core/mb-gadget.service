@@ -1,0 +1,14 @@
+[Unit]
+Description=MagicBridge USB HID Gadget (keyboard + mouse)
+After=local-fs.target
+Before=magicbridge.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mb-gadget.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

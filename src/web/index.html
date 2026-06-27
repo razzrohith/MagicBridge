@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MagicBridge</title>
+<style>
+/* ── Reset & base ────────────────────────────────────────────── */
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:#000;
+  font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  color:#d0d0d0;-webkit-font-smoothing:antialiased}
+button{font-family:inherit;cursor:pointer}
+
+/* ── Layout: flex column ─────────────────────────────────────── */
+body{display:flex;flex-direction:column}
+
+/* ── Top bar ─────────────────────────────────────────────────── */
+#top{
+  display:flex;align-items:center;gap:8px;
+  padding:0 12px;height:42px;flex-shrink:0;
+  background:#0d0d0d;border-bottom:1px solid #1c1c1c;
+  position:relative;z-index:10;user-select:none
+}
+#logo{
+  font-size:13.5px;font-weight:700;color:#fff;
+  letter-spacing:.6px;text-transform:uppercase;
+  font-variant-numeric:tabular-nums;white-space:nowrap
+}
+#logo span{color:#4a9eff;font-weight:400}
+.vline{width:1px;height:20px;background:#222;flex-shrink:0}
+/* Connection indicator */
+#conn{width:7px;height:7px;border-radius:50%;background:#333;flex-shrink:0;
+      transition:background .3s}
+#conn.ok{background:#22c55e}
+#conn.err{background:#ef4444}
+#conn.warn{background:#f59e0b}
+#status-txt{font-size:11px;color:#666;white-space:nowrap}
+.sep{flex:1}
+
+/* ── Toolbar buttons ─────────────────────────────────────────── */
+.tb{
+  background:#161616;border:1px solid #252525;color:#999;
+  padding:3px 10px;border-radius:5px;font-size:11.5px;
+  white-space:nowrap;transition:all .12s;line-height:1.5
+}
+.tb:hover{background:#1e1e1e;color:#ddd;border-color:#333}
+.tb:focus-visible{outline:2px solid #4a9eff;outline-offset:2px}
+.tb.active{background:#172040;border-color:#2a5cb8;color:#60a5fa}
+.tb.warn{background:#1a1000;border-color:#7a4a00;color:#f59e0b}
+
+/* ── Stream dropdown ─────────────────────────────────────────── */
+#q-wrap{position:relative}
+#q-drop{
+  position:absolute;top:calc(100% + 5px);right:0;
+  background:#111;border:1px solid #252525;border-radius:8px;
+  min-width:200px;overflow:hidden;z-index:30;display:none;
+  box-shadow:0 4px 20px rgba(0,0,0,.5)
+}
+#q-drop.open{display:block}
+.qg{padding:5px 0}
+.qg + .qg{border-top:1px solid #1c1c1c}
+.qhdr{font-size:10px;color:#444;padding:5px 13px 3px;text-transform:uppercase;
+       letter-spacing:.6px}
+.qopt{
+  padding:7px 13px;font-size:12px;color:#888;cursor:pointer;
+  display:flex;align-items:center;gap:8px;transition:background .1s
+}
+.qopt:hover{background:#1a1a1a;color:#ddd}
+.qopt.sel{color:#4a9eff}
+.qopt .ql{flex:1}
+.qopt .qb{font-size:10px;color:#444}
+.qopt.action{color:#f59e0b}
+.qopt.action:hover{background:#1a1000}
+
+/* ── Video area ──────────────────────────────────────────────── */
+#va{
+  flex:1;display:flex;align-items:center;justify-content:center;
+  background:#000;overflow:hidden;position:relative;
+  cursor:crosshair;outline:none
+}
+#stream{
+  max-width:100%;max-height:100%;object-fit:contain;
+  display:block;image-rendering:-webkit-optimize-contrast;
+  image-rendering:crisp-edges
+}
+/* No-signal overlay */
+#nosig{
+  display:none;position:absolute;inset:0;
+  flex-direction:column;align-items:center;justify-content:center;
+  gap:12px;pointer-events:none
+}
+#nosig.show{display:flex}
+#nosig .icon{opacity:.18}
+#nosig h3{font-size:15px;color:#3a3a3a;font-weight:500}
+#nosig p{font-size:11px;color:#282828}
+/* Capture hint ribbon */
+#hint{
+  position:absolute;bottom:16px;left:50%;transform:translateX(-50%);
+  background:rgba(0,0,0,.8);border:1px solid #1c1c1c;
+  color:#555;font-size:11px;padding:5px 14px;border-radius:20px;
+  pointer-events:none;transition:opacity .3s;white-space:nowrap
+}
+#hint.gone{opacity:0;pointer-events:none}
+/* Capture active ring */
+#cap-ring{
+  position:absolute;inset:0;pointer-events:none;
+  border:2px solid transparent;transition:border-color .2s
+}
+#cap-ring.on{border-color:#2563eb}
+
+/* ── Bottom bar ──────────────────────────────────────────────── */
+#bot{
+  display:flex;align-items:center;gap:8px;
+  padding:0 12px;height:34px;flex-shrink:0;
+  background:#0a0a0a;border-top:1px solid #141414
+}
+#bot label{font-size:11px;color:#444;white-space:nowrap}
+#paste-in{
+  background:#111;border:1px solid #1e1e1e;color:#bbb;
+  padding:3px 9px;border-radius:5px;font-size:12px;width:240px;
+  font-family:monospace;outline:none;transition:border .12s;min-width:0
+}
+#paste-in:focus{border-color:#2a5cb8}
+#bot-hint{font-size:10px;color:#252525;margin-left:auto;white-space:nowrap}
+
+/* ── Scrollbar ───────────────────────────────────────────────── */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:#0a0a0a}
+::-webkit-scrollbar-thumb{background:#222;border-radius:3px}
+</style>
+</head>
+<body>
+
+<!-- ── TOP BAR ───────────────────────────────────────────────── -->
+<div id="top" role="banner" aria-label="MagicBridge controls">
+
+  <span id="logo">Magic<span>Bridge</span></span>
+  <div class="vline"></div>
+  <div id="conn" role="status" aria-live="polite" title="Connection status"></div>
+  <span id="status-txt" aria-live="polite">Connecting…</span>
+
+  <div class="sep"></div>
+
+  <!-- Special key combos -->
+  <button class="tb" onclick="sendCombo(['ControlLeft','AltLeft','Delete'])"
+          title="Send Ctrl+Alt+Del to remote computer"
+          aria-label="Send Ctrl+Alt+Del">Ctrl+Alt+Del</button>
+
+  <button class="tb" onclick="sendCombo(['MetaLeft'])"
+          title="Send Windows/Super key"
+          aria-label="Send Windows key">⊞ Win</button>
+
+  <button class="tb" onclick="sendCombo(['AltLeft','F4'])"
+          title="Send Alt+F4"
+          aria-label="Send Alt+F4">Alt+F4</button>
+
+  <button class="tb" onclick="sendCombo(['ControlLeft','AltLeft','F2'])"
+          title="Switch to TTY2 (Linux)"
+          aria-label="Switch TTY">TTY2</button>
+
+  <!-- Stream settings dropdown -->
+  <div id="q-wrap" role="group" aria-label="Stream settings">
+    <button class="tb" id="q-btn" onclick="toggleQDrop()"
+            aria-haspopup="true" aria-expanded="false"
+            title="Stream quality and device settings">Stream ▾</button>
+    <div id="q-drop" role="menu" aria-label="Stream settings menu">
+
+      <div class="qg">
+        <div class="qhdr">Quality (MJPEG)</div>
+        <div class="qopt sel" data-q="80" onclick="setQuality(80,this)"
+             role="menuitemradio" aria-checked="true">
+          <span class="ql">High</span><span class="qb">80% · best detail</span></div>
+        <div class="qopt" data-q="60" onclick="setQuality(60,this)"
+             role="menuitemradio" aria-checked="false">
+          <span class="ql">Medium-High</span><span class="qb">60%</span></div>
+        <div class="qopt" data-q="40" onclick="setQuality(40,this)"
+             role="menuitemradio" aria-checked="false">
+          <span class="ql">Medium</span><span class="qb">40% · less bandwidth</span></div>
+        <div class="qopt" data-q="20" onclick="setQuality(20,this)"
+             role="menuitemradio" aria-checked="false">
+          <span class="ql">Low</span><span class="qb">20% · fastest</span></div>
+      </div>
+
+      <div class="qg">
+        <div class="qhdr">Actions</div>
+        <div class="qopt action" onclick="retryStream()"
+             role="menuitem">↺ Retry stream connection</div>
+        <div class="qopt action" onclick="loadDevices()"
+             role="menuitem">⟳ Refresh device list</div>
+      </div>
+
+      <div class="qg" id="dev-list-wrap" style="display:none">
+        <div class="qhdr">Capture device</div>
+        <div id="dev-list"></div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Capture toggle button -->
+  <button class="tb" id="cap-btn" onclick="toggleCapture()"
+          title="Capture keyboard and mouse input in the video area"
+          aria-label="Toggle keyboard and mouse capture"
+          aria-pressed="false">Click to capture</button>
+
+</div>
+
+<!-- ── VIDEO AREA ─────────────────────────────────────────────── -->
+<div id="va" onclick="requestCapture()" tabindex="-1"
+     role="application" aria-label="Remote screen — click to capture mouse and keyboard">
+
+  <img id="stream" src="/stream" alt="Remote screen feed"
+       aria-label="Live video from remote computer"
+       onerror="onStreamErr()" onload="onStreamLoad()">
+
+  <!-- No-signal overlay -->
+  <div id="nosig" role="status" aria-live="polite" aria-label="Video status">
+    <div class="icon">
+      <svg width="80" height="80" viewBox="0 0 24 24" fill="none"
+           stroke="#888" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="3" width="20" height="14" rx="2"/>
+        <polyline points="8 21 12 17 16 21"/>
+        <line x1="12" y1="17" x2="12" y2="21"/>
+        <line x1="5" y1="8" x2="19" y2="8" stroke-dasharray="3 2"/>
+      </svg>
+    </div>
+    <h3>No Signal</h3>
+    <p>Check HDMI cable and USB capture card connection</p>
+  </div>
+
+  <!-- Input capture hint -->
+  <div id="hint" aria-hidden="true">
+    Click to capture keyboard &amp; mouse &nbsp;·&nbsp; <kbd>Esc</kbd> to release
+  </div>
+
+  <!-- Active capture border ring -->
+  <div id="cap-ring" aria-hidden="true"></div>
+
+</div>
+
+<!-- ── BOTTOM BAR ────────────────────────────────────────────── -->
+<div id="bot" role="toolbar" aria-label="Paste and status">
+  <label for="paste-in">Paste:</label>
+  <input id="paste-in" type="text"
+         placeholder="Type text to send to remote, then press Enter…"
+         aria-label="Text to send to remote computer"
+         autocomplete="off" spellcheck="false"
+         onkeydown="pasteKeydown(event)">
+  <button class="tb" onclick="sendPaste()"
+          aria-label="Send text to remote computer">Send</button>
+  <span id="bot-hint" aria-hidden="true">Esc = release capture</span>
+</div>
+
+
+<script>
+'use strict';
+
+// ── State ──────────────────────────────────────────────────────
+let ws        = null;
+let captured  = false;
+let quality   = 80;
+let retryT    = null;
+let streamOk  = false;
+
+// ── WebSocket ──────────────────────────────────────────────────
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(proto + '://' + location.host + '/ws');
+
+  ws.onopen = () => {
+    setStatus('ok', 'Connected');
+  };
+  ws.onclose = () => {
+    setStatus('err', 'Disconnected — reconnecting…');
+    setTimeout(connect, 3000);
+  };
+  ws.onerror = () => {
+    setStatus('err', 'Connection error');
+  };
+}
+
+function send(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN)
+    ws.send(JSON.stringify(obj));
+}
+
+function setStatus(cls, text) {
+  const c = document.getElementById('conn');
+  const s = document.getElementById('status-txt');
+  c.className = cls;
+  c.setAttribute('aria-label', text);
+  s.textContent = text;
+}
+
+// ── Pointer lock (mouse capture) ───────────────────────────────
+function requestCapture() {
+  document.getElementById('va').requestPointerLock();
+}
+
+function releaseCapture() {
+  document.exitPointerLock();
+}
+
+function toggleCapture() {
+  if (captured) releaseCapture();
+  else          requestCapture();
+}
+
+document.addEventListener('pointerlockchange', () => {
+  captured = document.pointerLockElement === document.getElementById('va');
+  updateCaptureUI();
+  if (!captured) send({ type: 'release_all' });
+});
+
+document.addEventListener('pointerlockerror', () => {
+  setStatus('warn', 'Capture unavailable — try clicking the video area');
+});
+
+function updateCaptureUI() {
+  const btn  = document.getElementById('cap-btn');
+  const ring = document.getElementById('cap-ring');
+  const hint = document.getElementById('hint');
+
+  btn.textContent = captured ? 'Release  (Esc)' : 'Click to capture';
+  btn.classList.toggle('active', captured);
+  btn.setAttribute('aria-pressed', captured ? 'true' : 'false');
+  ring.classList.toggle('on', captured);
+  hint.classList.toggle('gone', captured);
+}
+
+// ── Keyboard event handling ────────────────────────────────────
+const pressedCodes = new Set();
+
+function shouldHandleKey(e) {
+  // Always pass through when captured
+  if (captured) return true;
+  // In the paste input — let native input work
+  if (e.target === document.getElementById('paste-in')) return false;
+  return false;
+}
+
+document.addEventListener('keydown', e => {
+  if (!shouldHandleKey(e)) return;
+  // Escape releases capture — still send to remote if captured
+  e.preventDefault();
+  e.stopPropagation();
+  if (!pressedCodes.has(e.code)) {
+    pressedCodes.add(e.code);
+    send({ type: 'keydown', code: e.code });
+  }
+}, true);
+
+document.addEventListener('keyup', e => {
+  if (!shouldHandleKey(e)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  pressedCodes.delete(e.code);
+  send({ type: 'keyup', code: e.code });
+}, true);
+
+// ── Mouse event handling ───────────────────────────────────────
+document.addEventListener('mousemove', e => {
+  if (!captured) return;
+  const dx = e.movementX, dy = e.movementY;
+  if (dx !== 0 || dy !== 0)
+    send({ type: 'mousemove', dx, dy });
+});
+
+document.addEventListener('mousedown', e => {
+  if (!captured) return;
+  e.preventDefault();
+  send({ type: 'mousedown', button: e.button });
+});
+
+document.addEventListener('mouseup', e => {
+  if (!captured) return;
+  send({ type: 'mouseup', button: e.button });
+});
+
+document.addEventListener('wheel', e => {
+  if (!captured) return;
+  e.preventDefault();
+  send({ type: 'wheel', dy: e.deltaY > 0 ? 1 : -1 });
+}, { passive: false });
+
+document.addEventListener('contextmenu', e => {
+  if (captured) e.preventDefault();
+});
+
+// ── Special combos ─────────────────────────────────────────────
+function sendCombo(codes) {
+  send({ type: 'combo', codes });
+}
+
+// ── Stream management ──────────────────────────────────────────
+function onStreamLoad() {
+  streamOk = true;
+  document.getElementById('nosig').className = '';
+  document.getElementById('stream').style.display = 'block';
+  if (retryT) { clearInterval(retryT); retryT = null; }
+}
+
+function onStreamErr() {
+  streamOk = false;
+  document.getElementById('nosig').className = 'show';
+  document.getElementById('stream').style.display = 'none';
+  if (!retryT) {
+    retryT = setInterval(() => {
+      const img = document.getElementById('stream');
+      img.src = '/stream?' + Date.now();
+    }, 4000);
+  }
+}
+
+function retryStream() {
+  closeQDrop();
+  document.getElementById('stream').src = '/stream?' + Date.now();
+}
+
+// ── Stream quality ─────────────────────────────────────────────
+function setQuality(q, el) {
+  quality = q;
+  document.querySelectorAll('.qopt[data-q]').forEach(o => {
+    o.classList.toggle('sel', o.dataset.q == q);
+    o.setAttribute('aria-checked', o.dataset.q == q ? 'true' : 'false');
+  });
+  closeQDrop();
+
+  fetch('/api/stream/settings', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ quality: q }),
+  }).then(r => r.json()).then(d => {
+    if (d.ok) setTimeout(retryStream, 2000);
+  }).catch(() => {});
+}
+
+// ── Stream dropdown ────────────────────────────────────────────
+function toggleQDrop() {
+  const drop = document.getElementById('q-drop');
+  const open = drop.classList.toggle('open');
+  document.getElementById('q-btn').setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function closeQDrop() {
+  document.getElementById('q-drop').classList.remove('open');
+  document.getElementById('q-btn').setAttribute('aria-expanded', 'false');
+}
+
+document.addEventListener('click', e => {
+  if (!document.getElementById('q-wrap').contains(e.target)) closeQDrop();
+});
+
+// ── Device list ────────────────────────────────────────────────
+function loadDevices() {
+  fetch('/api/devices').then(r => r.json()).then(devs => {
+    const wrap = document.getElementById('dev-list-wrap');
+    const list = document.getElementById('dev-list');
+    if (!devs.length) { wrap.style.display = 'none'; return; }
+    wrap.style.display = 'block';
+    list.innerHTML = devs.map(d =>
+      `<div class="qopt" onclick="selectDevice('${d.device}')" role="menuitem">
+         <span class="ql">${esc(d.name)}</span>
+         <span class="qb">${esc(d.device)}</span>
+       </div>`
+    ).join('');
+  }).catch(() => {});
+}
+
+function selectDevice(dev) {
+  closeQDrop();
+  fetch('/api/stream/settings', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ device: dev }),
+  }).then(r => r.json()).then(d => {
+    if (d.ok) setTimeout(retryStream, 2000);
+  }).catch(() => {});
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Paste feature ──────────────────────────────────────────────
+function pasteKeydown(e) {
+  if (e.key === 'Enter') {
+    sendPaste();
+    e.preventDefault();
+  }
+}
+
+function sendPaste() {
+  const inp  = document.getElementById('paste-in');
+  const text = inp.value;
+  if (!text) return;
+  send({ type: 'paste', text });
+  inp.value = '';
+}
+
+// ── Keyboard shortcut: Ctrl+Shift+F to toggle capture ─────────
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.shiftKey && e.code === 'KeyF') {
+    toggleCapture();
+  }
+}, false);
+
+// ── Periodic status poll (every 30s) ──────────────────────────
+function pollStatus() {
+  fetch('/api/status').then(r => r.json()).then(d => {
+    if (!d.hid_kb || !d.hid_ms) {
+      document.getElementById('cap-btn').classList.add('warn');
+      document.getElementById('cap-btn').title =
+        'HID device not ready — check USB gadget (mb-gadget.service)';
+    } else {
+      document.getElementById('cap-btn').classList.remove('warn');
+    }
+  }).catch(() => {});
+}
+
+// ── Init ───────────────────────────────────────────────────────
+connect();
+loadDevices();
+pollStatus();
+setInterval(pollStatus, 30000);
+</script>
+</body>
+</html>
