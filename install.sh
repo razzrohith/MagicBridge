@@ -65,6 +65,9 @@ MB_USER="${SUDO_USER:-pi}"     # non-root user who ran sudo
 info "Updating apt lists…"
 apt-get update -qq
 
+# Install git first so clone works even if the rest fails
+apt-get install -y git 2>&1 | grep -E "^(Setting up|E:|W:)" || true
+
 APT_PKGS=(
     # Python / web
     python3 python3-pip python3-aiohttp python3-flask python3-bcrypt
@@ -81,7 +84,7 @@ APT_PKGS=(
     # SSL
     openssl
     # WiFi / network
-    NetworkManager wireless-tools wpasupplicant
+    network-manager wireless-tools wpasupplicant
     # Provisioning AP
     hostapd dnsmasq
     # mDNS
