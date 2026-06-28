@@ -89,6 +89,8 @@ APT_PKGS=(
     hostapd dnsmasq
     # mDNS
     avahi-daemon libnss-mdns
+    # Firewall
+    iptables
     # Misc
     curl jq
 )
