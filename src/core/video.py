@@ -162,16 +162,25 @@ class VideoManager:
         self.process = None
 
     def _start_ustreamer(self) -> bool:
-        """Launch ustreamer MJPEG server (ustreamer v4.x syntax)."""
+        """Launch ustreamer MJPEG server.
+
+        Uses Debian Bookworm apt package flags (ustreamer 4.9).
+        Key flags for v4.9:
+          --resolution WxH  (replaces old --width / --height)
+          --desired-fps N   (still the correct flag in 4.9; NOT --fps)
+          --host address    (long form; short form is -s, NOT -H)
+          --persistent      (keep running if HDMI unplugged)
+        """
         cmd = [
             "ustreamer",
-            "--device",      self.device,
-            "--resolution",  self.resolution,   # v4: WxH, not --width/--height
-            "--fps",         str(self.fps),      # v4: --fps, not --desired-fps
-            "--quality",     str(self.quality),
-            "--host",        STREAM_HOST,
-            "--port",        str(self.port),
-            "--workers",     "2",
+            "--device",         self.device,
+            "--resolution",     self.resolution,
+            "--desired-fps",    str(self.fps),
+            "--quality",        str(self.quality),
+            "--host",           STREAM_HOST,
+            "--port",           str(self.port),
+            "--workers",        "2",
+            "--persistent",
             "--drop-same-frames", "30",
         ]
         try:
