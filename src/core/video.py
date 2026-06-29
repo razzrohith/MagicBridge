@@ -162,20 +162,17 @@ class VideoManager:
         self.process = None
 
     def _start_ustreamer(self) -> bool:
-        """Launch ustreamer MJPEG server."""
-        w, h = self.resolution.split("x")
+        """Launch ustreamer MJPEG server (ustreamer v4.x syntax)."""
         cmd = [
             "ustreamer",
-            "--device",        self.device,
-            "--width",         w,
-            "--height",        h,
-            "--desired-fps",   str(self.fps),
-            "--quality",       str(self.quality),
-            "--host",          STREAM_HOST,
-            "--port",          str(self.port),
-            "--workers",       "2",
-            "--persistent",              # keep running even if device disconnects
-            "--drop-same-frames=30",     # skip identical frames, save CPU
+            "--device",      self.device,
+            "--resolution",  self.resolution,   # v4: WxH, not --width/--height
+            "--fps",         str(self.fps),      # v4: --fps, not --desired-fps
+            "--quality",     str(self.quality),
+            "--host",        STREAM_HOST,
+            "--port",        str(self.port),
+            "--workers",     "2",
+            "--drop-same-frames", "30",
         ]
         try:
             self.process = subprocess.Popen(
