@@ -34,7 +34,7 @@ class VideoManager:
     def __init__(self):
         self.process    = None
         self.device     = None
-        self.resolution = "1920x1080"
+        self.resolution = "1280x720"
         self.fps        = 30
         self.quality    = 80      # MJPEG quality 1–100
         self.mode       = "mjpeg" # "mjpeg" | "h264" (h264 needs ffmpeg)
@@ -69,9 +69,17 @@ class VideoManager:
         return devices
 
     def get_best_device(self) -> str:
-        """Return first found VIDEO_CAPTURE device, or None."""
+        """Return best V4L2 capture device, preferring USB over internal Pi devices."""
         devs = self.detect_devices()
-        return devs[0]["device"] if devs else None
+        if not devs:
+            return None
+        # Prefer USB devices (capture cards) — Pi internal devices use "platform:" bus
+        usb = [d for d in devs if d["bus"].startswith("usb")]
+        if usb:
+            log.info("Auto-selected USB capture device: %s (%s)", usb[0]["device"], usb[0]["name"])
+            return usb[0]["device"]
+        log.info("No USB capture device found, using: %s", devs[0]["device"])
+        return devs[0]["device"]
 
     def get_resolutions(self, device: str = None) -> list:
         """Return sorted list of supported resolutions for a device."""
