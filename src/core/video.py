@@ -101,23 +101,77 @@ class VideoManager:
             pass
         return defaults
 
+    def get_best_mjpeg_resolution(self, device: str = None) -> str:
+        """Return the highest native MJPEG resolution the capture card supports.
+
+        Parses v4l2-ctl --list-formats-ext, looking only at resolutions listed
+        under the MJPG/MJPEG pixel format block (not YUYV, which requires slow
+        software conversion).  Falls back to None if detection fails.
+
+        Typical MS2109 MJPEG resolutions: 1920x1080, 1280x720, 848x480, 640x480
+        """
+        dev = device or self.device or "/dev/video0"
+        try:
+            r = subprocess.run(
+                ["v4l2-ctl", "--device", dev, "--list-formats-ext"],
+                capture_output=True, text=True, timeout=5
+            )
+            in_mjpeg = False
+            best_w, best_h = 0, 0
+            for line in r.stdout.splitlines():
+                stripped = line.strip()
+                # Detect start of MJPEG format block
+                if ("'MJPG'" in stripped or "MJPEG" in stripped) and "ioctl" not in stripped:
+                    in_mjpeg = True
+                # Detect start of a different format block (YUYV, NV12, etc.)
+                elif stripped.startswith("[") and in_mjpeg and "MJPG" not in stripped and "MJPEG" not in stripped:
+                    in_mjpeg = False
+                if in_mjpeg:
+                    m = re.search(r"(\d{3,4})x(\d{3,4})", line)
+                    if m:
+                        w, h = int(m.group(1)), int(m.group(2))
+                        if w * h > best_w * best_h:
+                            best_w, best_h = w, h
+            if best_w > 0:
+                log.info("Native MJPEG best resolution from %s: %dx%d", dev, best_w, best_h)
+                return f"{best_w}x{best_h}"
+        except Exception as e:
+            log.debug("get_best_mjpeg_resolution failed: %s", e)
+        return None
+
     # ── Stream control ─────────────────────────────────────────────────────────
 
     def start(self, device: str = None, resolution: str = None,
               fps: int = None, quality: int = None, mode: str = None) -> bool:
-        """Start streaming. Returns True on success. Safe to call repeatedly."""
+        """Start streaming. Returns True on success. Safe to call repeatedly.
+
+        Resolution selection priority:
+          1. Explicit `resolution` argument (e.g. from stealth panel override)
+          2. Auto-detect highest native MJPEG resolution from capture card
+          3. Self.resolution fallback (default 1280x720)
+        """
         with self._lock:
-            if device:     self.device     = device
-            if resolution: self.resolution = resolution
-            if fps is not None:     self.fps     = int(fps)
-            if quality is not None: self.quality = int(quality)
-            if mode:       self.mode       = mode
+            if device:              self.device     = device
+            if resolution:          self.resolution = resolution
+            if fps is not None:     self.fps        = int(fps)
+            if quality is not None: self.quality    = int(quality)
+            if mode:                self.mode       = mode
 
             if not self.device:
                 self.device = self.get_best_device()
             if not self.device:
                 log.warning("No V4L2 capture device found")
                 return False
+
+            # Auto-detect best native MJPEG resolution when not explicitly set.
+            # This lets MagicBridge adapt to any laptop/screen resolution automatically:
+            # 14" 1080p, 16" 1440p, 4K, etc. — just uses whatever the capture card signals.
+            if not resolution:
+                best = self.get_best_mjpeg_resolution(self.device)
+                if best and best != self.resolution:
+                    log.info("Auto-resolution: %s -> %s (native MJPEG from capture card)",
+                             self.resolution, best)
+                    self.resolution = best
 
             self._stop_locked()
 
@@ -174,6 +228,7 @@ class VideoManager:
         cmd = [
             "ustreamer",
             "--device",         self.device,
+            "--format",         "MJPEG",         # use native HW MJPEG from capture card (not YUYV software-convert)
             "--resolution",     self.resolution,
             "--desired-fps",    str(self.fps),
             "--quality",        str(self.quality),

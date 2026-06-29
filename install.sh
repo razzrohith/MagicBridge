@@ -111,13 +111,14 @@ ok "Prerequisites installed"
 CONFIG_TXT="/boot/firmware/config.txt"
 [[ -f "$CONFIG_TXT" ]] || CONFIG_TXT="/boot/config.txt"
 
-info "Configuring USB OTG in $CONFIG_TXT…"
-if ! grep -q "^dtoverlay=dwc2" "$CONFIG_TXT"; then
-    echo "dtoverlay=dwc2" >> "$CONFIG_TXT"
-    ok "dtoverlay=dwc2 added"
-else
-    ok "dtoverlay=dwc2 already present"
-fi
+info "Configuring USB OTG (peripheral mode) in $CONFIG_TXT…"
+# Remove any existing dtoverlay=dwc2 line from ANY section (cm4, cm5, all, global)
+sed -i '/^dtoverlay=dwc2/d' "$CONFIG_TXT"
+# Ensure [all] section exists — Pi 4 only applies settings outside [cm4]/[cm5]/[pi4] blocks
+grep -q '^\[all\]' "$CONFIG_TXT" || echo '[all]' >> "$CONFIG_TXT"
+# Insert immediately after [all] so it applies to all Pi models including Pi 4
+sed -i '/^\[all\]/a dtoverlay=dwc2,dr_mode=peripheral' "$CONFIG_TXT"
+ok "dtoverlay=dwc2,dr_mode=peripheral added to [all] section (Pi 4 / Pi 5 compatible)"
 
 # Load module now (for immediate use without reboot)
 modprobe libcomposite 2>/dev/null || warn "libcomposite not loadable now — needs reboot"

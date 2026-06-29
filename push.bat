@@ -1,8 +1,9 @@
 @echo off
 cd /d "E:\Startup\magicbridge"
-git add -A
-git commit -m "Fix ustreamer: use v4 flags (--resolution/--fps instead of --width/--desired-fps)"
-git push origin main --force
-echo.
-if %ERRORLEVEL% EQU 0 (echo SUCCESS!) else (echo FAILED)
-pause
+
+:: Remove stale git lock if present
+if exist .git\index.lock del /f .git\index.lock
+
+:: Unstage log file, stage everything else
+git restore --staged pi_fix_log.txt 2>nul
+git add auto_duplicate_on_connect.ps
